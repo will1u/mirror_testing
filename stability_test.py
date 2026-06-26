@@ -9,28 +9,26 @@ point on disk. Press Ctrl+C at any time to stop early -- the run still ends
 with the usual final plot.
 
 Hardware:
-  - Thorlabs MDT693B piezo controller, driven via ../mdt693b/MDT_COMMAND_LIB.py
+  - Thorlabs MDT693B piezo controller, driven via ./MDT_COMMAND_LIB.py
   - Thorlabs BC1-series beam profiler, driven via ./tlbc1.py
 """
 
 import csv
 import datetime
 import os
-import sys
 import time
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "mdt693b"))
-from MDT_COMMAND_LIB import (  # noqa: E402
+from MDT_COMMAND_LIB import (
     mdtListDevices, mdtOpen, mdtClose, mdtGetLimtVoltage,
     mdtSetXAxisVoltage, mdtGetXAxisVoltage,
     mdtSetYAxisVoltage, mdtGetYAxisVoltage,
 )
 
-import tlbc1  # noqa: E402
-import bc1_stability_common as bc1c  # noqa: E402
+import tlbc1
+import bc1_stability_common as bc1c
 
 # ----------------------------------------------------------------------------
 # Configuration

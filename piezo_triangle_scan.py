@@ -78,7 +78,8 @@ def triangle_wave(v_min, v_max, points_per_ramp, n_cycles):
 def save_results(rows, fig):
     run_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    csv_path = os.path.join(OUTPUT_DIR, f"piezo_scan_{run_stamp}_min{V_MIN}_max{V_MAX}.csv")
+    axis = AXIS.upper()
+    csv_path = os.path.join(OUTPUT_DIR, f"piezo_scan_{run_stamp}_min{V_MIN}_max{V_MAX}_axis{axis}.csv")
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow([
@@ -90,7 +91,7 @@ def save_results(rows, fig):
         writer.writerows(rows)
     print(f"Saved {len(rows)} samples to {csv_path}")
 
-    plot_path = os.path.join(OUTPUT_DIR, f"piezo_scan_{run_stamp}_min{V_MIN}_max{V_MAX}.png")
+    plot_path = os.path.join(OUTPUT_DIR, f"piezo_scan_{run_stamp}_min{V_MIN}_max{V_MAX}_axis{axis}.png")
     fig.savefig(plot_path, dpi=150)
     print(f"Saved plot to {plot_path}")
 
@@ -156,11 +157,13 @@ def main():
     ax_pos = ax_time.twinx()
     ax_pos.set_ylabel("Gaussian fit center displacement (um)", color="tab:red")
     ax_pos.tick_params(axis="y", labelcolor="tab:red")
-    line_cx, = ax_pos.plot([], [], "-", color="tab:red", label="Fit center X")
-    line_cy, = ax_pos.plot([], [], "-", color="tab:orange", label="Fit center Y")
+    # camera is mounted rotated 90 deg, so camera X is physical Y and vice versa;
+    # data columns are unchanged, only the display labels are swapped
+    line_cx, = ax_pos.plot([], [], "-", color="tab:red", label="Fit center Y")
+    line_cy, = ax_pos.plot([], [], "-", color="tab:orange", label="Fit center X")
 
-    ax_xy.set_xlabel("Fit center X (um)")
-    ax_xy.set_ylabel("Fit center Y (um)")
+    ax_xy.set_xlabel("Fit center Y (um)")
+    ax_xy.set_ylabel("Fit center X (um)")
     ax_xy.set_title("Beam position trajectory (Gaussian fit center)")
     scatter_xy = ax_xy.scatter([], [], c=[], cmap="viridis", s=15)
 

@@ -4,22 +4,35 @@ of a triangle wave on one axis, while tracking the beam position on the
 Thorlabs BC1 beam profiler in real time.
 
 Saves a CSV with the piezo setpoint/readback voltage and the beam centroid
-and peak position (in um, relative to the sensor center) for every sample,
-and shows a live plot while the scan runs. Press Ctrl+C at any time to stop
-early -- the data collected so far is still saved and plotted.
+and Gaussian-fit center position (um, relative to sensor center) for every
+sample, and shows a live plot while the scan runs. Press Ctrl+C at any time
+to stop early -- the data collected so far is still saved and plotted.
 
 Hardware:
   - Thorlabs MDT693B piezo controller, driven via ./MDT_COMMAND_LIB.py
   - Thorlabs BC1-series beam profiler, driven via ./tlbc1.py
 
+Gaussian fit note: TLBC1_get_scan_data() already computes a Gaussian fit to
+the beam on-camera, exposed in the TLBC1_Calculations struct as
+gaussianFitCentroidPositionX/Y (pixel units). This script logs that fitted
+center in place of the old profilePeakPosX/Y (raw brightest-pixel position),
+since the fit center is far less sensitive to single-pixel noise/saturation.
+
+Units assumption: gaussianFitCentroidPositionX/Y is treated as a pixel-index
+float, same convention as centroidPositionX/Y elsewhere in this struct, so
+it's converted to physical units the same way: (value - sensor_center) *
+pixel_pitch. If your TLBC1 header defines this field as already-physical
+units, drop the pixel_pitch multiply below -- you'd notice the fitted center
+sitting off from the plain centroid by roughly a pixel_pitch.
+
 Performance note: profiling shows TLBC1_get_scan_data() takes ~2.5-4s per
 call no matter which getter functions are used (the official Thorlabs C
 sample exhibits the same per-call latency) -- the bottleneck is the camera
-driver's frame-acquisition round trip, not Python/plotting overhead. The
-single lever that meaningfully helps is disabling auto-exposure, which cuts
-~35-40% off each call (auto-exposure re-evaluates exposure every frame).
-This script does that automatically for the duration of the scan and
-restores the previous auto-exposure setting afterwards.
+driver's frame-acquisition round trip, not Python/plotting/fit overhead.
+The single lever that meaningfully helps is disabling auto-exposure, which
+cuts ~35-40% off each call (auto-exposure re-evaluates exposure every
+frame). This script does that automatically for the duration of the scan
+and restores the previous auto-exposure setting afterwards.
 """
 
 import csv
@@ -41,9 +54,9 @@ import tlbc1
 # ----------------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------------
-AXIS = "Y"              # which piezo axis to scan: "X" or "Y"
+AXIS = "X"              # which piezo axis to scan: "X" or "Y"
 V_MIN = 0.0             # triangle wave low voltage (V)
-V_MAX = 150.0            # triangle wave high voltage (V), clipped to device limit
+V_MAX = 40.0            # triangle wave high voltage (V), clipped to device limit
 POINTS_PER_RAMP = 40    # samples per up/down ramp
 N_CYCLES = 3            # number of full triangle cycles
 SETTLE_TIME = 0.02      # seconds to wait after setting voltage before reading
@@ -65,18 +78,19 @@ def triangle_wave(v_min, v_max, points_per_ramp, n_cycles):
 def save_results(rows, fig):
     run_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    csv_path = os.path.join(OUTPUT_DIR, f"piezo_scan_{run_stamp}.csv")
+    csv_path = os.path.join(OUTPUT_DIR, f"piezo_scan_{run_stamp}_min{V_MIN}_max{V_MAX}.csv")
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow([
             "sample", "timestamp", "voltage_setpoint_V", "voltage_readback_V",
-            "centroid_x_um", "centroid_y_um", "peak_x_um", "peak_y_um",
+            "centroid_x_um", "centroid_y_um", "gaussfit_center_x_um", "gaussfit_center_y_um",
+            "gaussfit_rating_x", "gaussfit_rating_y",
             "peak_intensity_counts", "total_power_mW",
         ])
         writer.writerows(rows)
     print(f"Saved {len(rows)} samples to {csv_path}")
 
-    plot_path = os.path.join(OUTPUT_DIR, f"piezo_scan_{run_stamp}.png")
+    plot_path = os.path.join(OUTPUT_DIR, f"piezo_scan_{run_stamp}_min{V_MIN}_max{V_MAX}.png")
     fig.savefig(plot_path, dpi=150)
     print(f"Saved plot to {plot_path}")
 
@@ -140,28 +154,28 @@ def main():
     line_voltage, = ax_time.plot([], [], "-", color="tab:blue", label="Piezo voltage")
 
     ax_pos = ax_time.twinx()
-    ax_pos.set_ylabel("Centroid displacement (um)", color="tab:red")
+    ax_pos.set_ylabel("Gaussian fit center displacement (um)", color="tab:red")
     ax_pos.tick_params(axis="y", labelcolor="tab:red")
-    line_cx, = ax_pos.plot([], [], "-", color="tab:red", label="Centroid X")
-    line_cy, = ax_pos.plot([], [], "-", color="tab:orange", label="Centroid Y")
+    line_cx, = ax_pos.plot([], [], "-", color="tab:red", label="Fit center X")
+    line_cy, = ax_pos.plot([], [], "-", color="tab:orange", label="Fit center Y")
 
-    ax_xy.set_xlabel("Centroid X (um)")
-    ax_xy.set_ylabel("Centroid Y (um)")
-    ax_xy.set_title("Beam position trajectory")
+    ax_xy.set_xlabel("Fit center X (um)")
+    ax_xy.set_ylabel("Fit center Y (um)")
+    ax_xy.set_title("Beam position trajectory (Gaussian fit center)")
     scatter_xy = ax_xy.scatter([], [], c=[], cmap="viridis", s=15)
 
     fig.suptitle(f"Piezo {axis}-axis triangle scan vs beam position")
     fig.tight_layout()
 
-    def redraw(rows, cx_hist, cy_hist):
+    def redraw(rows, gfx_hist, gfy_hist):
         xs = list(range(len(rows)))
         line_voltage.set_data(xs, [r[2] for r in rows])
-        line_cx.set_data(xs, cx_hist)
-        line_cy.set_data(xs, cy_hist)
+        line_cx.set_data(xs, gfx_hist)
+        line_cy.set_data(xs, gfy_hist)
         ax_time.relim(); ax_time.autoscale_view()
         ax_pos.relim(); ax_pos.autoscale_view()
 
-        scatter_xy.set_offsets(np.column_stack([cx_hist, cy_hist]))
+        scatter_xy.set_offsets(np.column_stack([gfx_hist, gfy_hist]))
         scatter_xy.set_array(np.array(xs))
         ax_xy.relim(); ax_xy.autoscale_view()
 
@@ -170,7 +184,7 @@ def main():
 
     # --- scan loop ---
     rows = []
-    cx_hist, cy_hist = [], []
+    gfx_hist, gfy_hist = [], []
     interrupted = False
 
     try:
@@ -186,26 +200,29 @@ def main():
 
             centroid_x_um = (scan.centroidPositionX - center_x) * pixel_pitch_h
             centroid_y_um = (scan.centroidPositionY - center_y) * pixel_pitch_v
-            peak_x_um = (scan.profilePeakPosX - center_x) * pixel_pitch_h
-            peak_y_um = (scan.profilePeakPosY - center_y) * pixel_pitch_v
+            gfit_center_x_um = (scan.gaussianFitCentroidPositionX - center_x) * pixel_pitch_h
+            gfit_center_y_um = (scan.gaussianFitCentroidPositionY - center_y) * pixel_pitch_v
             total_power_mw = 10.0 ** (scan.totalPower / 10.0)
 
             timestamp = datetime.datetime.now()
             rows.append([
                 i, timestamp.isoformat(), v_set, v_readback[0],
-                centroid_x_um, centroid_y_um, peak_x_um, peak_y_um,
+                centroid_x_um, centroid_y_um, gfit_center_x_um, gfit_center_y_um,
+                scan.gaussianFitRatingX, scan.gaussianFitRatingY,
                 scan.peakIntensity, total_power_mw,
             ])
 
-            cx_hist.append(centroid_x_um)
-            cy_hist.append(centroid_y_um)
+            gfx_hist.append(gfit_center_x_um)
+            gfy_hist.append(gfit_center_y_um)
 
             print(f"[{timestamp:%H:%M:%S.%f}] {i + 1}/{len(voltages)} "
                   f"V_set={v_set:6.2f}V V_read={v_readback[0]:6.2f}V "
-                  f"Centroid=({centroid_x_um:7.2f}, {centroid_y_um:7.2f}) um")
+                  f"Centroid=({centroid_x_um:7.2f}, {centroid_y_um:7.2f}) um "
+                  f"GaussFitCenter=({gfit_center_x_um:7.2f}, {gfit_center_y_um:7.2f}) um "
+                  f"rating=({scan.gaussianFitRatingX:.3f}, {scan.gaussianFitRatingY:.3f})")
 
             if i % PLOT_UPDATE_EVERY == 0 or i == len(voltages) - 1:
-                redraw(rows, cx_hist, cy_hist)
+                redraw(rows, gfx_hist, gfy_hist)
 
     except KeyboardInterrupt:
         interrupted = True
@@ -223,15 +240,12 @@ def main():
     if not rows:
         return
 
-    redraw(rows, cx_hist, cy_hist)
+    redraw(rows, gfx_hist, gfy_hist)
     save_results(rows, fig)
 
     plt.ioff()
-    if not interrupted:
-        plt.show()
-    else:
-        plt.show(block=False)
-        plt.pause(0.1)
+    plt.show(block=False)
+    plt.pause(0.1)
 
 
 if __name__ == "__main__":

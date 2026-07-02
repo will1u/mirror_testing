@@ -36,7 +36,7 @@ import bc1_stability_common as bc1c
 SET_PIEZO = True        # hold the piezo at a fixed voltage for the duration of the test;
                          # set False to just monitor the beam without touching the piezo
 FIXED_VOLTAGE_X = 0.0   # V, only used if SET_PIEZO
-FIXED_VOLTAGE_Y = 0.0   # V, only used if SET_PIEZO
+FIXED_VOLTAGE_Y = 40.0   # V, only used if SET_PIEZO
 
 DURATION_HOURS = 4.0    # total run time; set to None to run until Ctrl+C
 SAMPLE_INTERVAL_S = 5.0 # target time between samples -- camera latency (~2-4s/call) may
@@ -45,7 +45,7 @@ SAMPLE_INTERVAL_S = 5.0 # target time between samples -- camera latency (~2-4s/c
 FIXED_EXPOSURE_MS = 0.5  # auto-exposure is disabled for the whole run: it would actively
                           # compensate for intensity drift, masking the very thing we're
                           # trying to measure
-WAVELENGTH_NM = None      # set to your laser's wavelength (nm) for accurate power readings;
+WAVELENGTH_NM = 635      # set to your laser's wavelength (nm) for accurate power readings;
                            # None leaves the camera's current calibration untouched
 
 PLOT_UPDATE_EVERY = 10   # redraw (and snapshot-save) the live plot every N samples

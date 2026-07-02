@@ -8,6 +8,11 @@ and Gaussian-fit center position (um, relative to sensor center) for every
 sample, and shows a live plot while the scan runs. Press Ctrl+C at any time
 to stop early -- the data collected so far is still saved and plotted.
 
+The scan loop is factored into `run_triangle_scan()` so it can be reused for a
+single scan (this script's `main()`) or driven many times around different
+setpoints by the master interface (`piezo_master_scan.py`) while sharing one
+open piezo + camera session.
+
 Hardware:
   - Thorlabs MDT693B piezo controller, driven via ./MDT_COMMAND_LIB.py
   - Thorlabs BC1-series beam profiler, driven via ./tlbc1.py
@@ -17,6 +22,12 @@ the beam on-camera, exposed in the TLBC1_Calculations struct as
 gaussianFitCentroidPositionX/Y (pixel units). This script logs that fitted
 center in place of the old profilePeakPosX/Y (raw brightest-pixel position),
 since the fit center is far less sensitive to single-pixel noise/saturation.
+
+Camera orientation note: the camera is mounted rotated 90 deg, so the camera's
+X axis is the physical/piezo Y axis and vice versa. The raw camera columns are
+logged unchanged; only the plot *labels* are put in the piezo frame (camera X
+data is labelled "Y", camera Y data "X"), so the plots show the effect of the
+driven piezo axis rather than which camera axis it lands on.
 
 Units assumption: gaussianFitCentroidPositionX/Y is treated as a pixel-index
 float, same convention as centroidPositionX/Y elsewhere in this struct, so
@@ -39,6 +50,7 @@ import csv
 import datetime
 import os
 import time
+from collections import namedtuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -65,7 +77,15 @@ FIXED_EXPOSURE_MS = 0.5  # exposure time (ms) used during the scan; auto-exposur
                           # is disabled for the scan and restored afterwards
 PLOT_UPDATE_EVERY = 10     # redraw the live plot every N samples instead of every sample
 
-OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
+# new scans are written here (existing root-level CSVs are left untouched)
+OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scans")
+
+# bundle of sensor geometry needed to convert pixel coordinates to microns
+Sensor = namedtuple("Sensor", "center_x center_y pitch_h pitch_v")
+
+# piezo axis -> setter/getter for that axis' voltage
+_SET_AXIS = {"X": mdtSetXAxisVoltage, "Y": mdtSetYAxisVoltage}
+_GET_AXIS = {"X": mdtGetXAxisVoltage, "Y": mdtGetYAxisVoltage}
 
 
 def triangle_wave(v_min, v_max, points_per_ramp, n_cycles):
@@ -75,11 +95,14 @@ def triangle_wave(v_min, v_max, points_per_ramp, n_cycles):
     return np.tile(one_cycle, n_cycles)
 
 
-def save_results(rows, fig):
+def save_results(rows, fig, output_dir, axis, v_min, v_max):
+    """Write one sub-scan's CSV (+PNG) to output_dir; return the CSV path."""
+    os.makedirs(output_dir, exist_ok=True)
     run_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    axis = axis.upper()
+    base = f"piezo_scan_{run_stamp}_min{v_min}_max{v_max}_axis{axis}"
 
-    axis = AXIS.upper()
-    csv_path = os.path.join(OUTPUT_DIR, f"piezo_scan_{run_stamp}_min{V_MIN}_max{V_MAX}_axis{axis}.csv")
+    csv_path = os.path.join(output_dir, base + ".csv")
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow([
@@ -91,15 +114,148 @@ def save_results(rows, fig):
         writer.writerows(rows)
     print(f"Saved {len(rows)} samples to {csv_path}")
 
-    plot_path = os.path.join(OUTPUT_DIR, f"piezo_scan_{run_stamp}_min{V_MIN}_max{V_MAX}_axis{axis}.png")
+    plot_path = os.path.join(output_dir, base + ".png")
     fig.savefig(plot_path, dpi=150)
     print(f"Saved plot to {plot_path}")
+    return csv_path
+
+
+def run_triangle_scan(piezo_hdl, axis, bc1_vi, sensor, v_min, v_max,
+                      points_per_ramp, n_cycles, settle_time, output_dir,
+                      live=True):
+    """Run one triangle sweep on `axis` and save its CSV (+PNG) to output_dir.
+
+    Assumes the piezo controller and beam profiler are already open and the
+    camera exposure is already configured (so many sub-scans can share one
+    session). `v_min`/`v_max` should already be clipped to the device limit by
+    the caller. `sensor` is a Sensor namedtuple. When `live` is True the figure
+    is updated incrementally as the scan runs; when False it is rendered once at
+    the end purely to save the PNG and then closed. Returns (csv_path, rows).
+    Re-raises KeyboardInterrupt after saving the partial sub-scan so a caller
+    driving many scans can stop the whole sweep.
+    """
+    axis = axis.upper()
+    set_axis_voltage = _SET_AXIS[axis]
+    get_axis_voltage = _GET_AXIS[axis]
+
+    voltages = triangle_wave(v_min, v_max, points_per_ramp, n_cycles)
+    print(f"\n=== Piezo {axis} sub-scan {v_min:.1f}-{v_max:.1f} V "
+          f"({len(voltages)} samples) ===")
+
+    # --- figure (drives the live view and/or the saved PNG) ---
+    if live:
+        plt.ion()
+    fig, (ax_time, ax_xy) = plt.subplots(1, 2, figsize=(11, 5))
+
+    ax_time.set_xlabel("Sample")
+    ax_time.set_ylabel("Voltage (V)", color="tab:blue")
+    ax_time.tick_params(axis="y", labelcolor="tab:blue")
+    line_voltage, = ax_time.plot([], [], "-", color="tab:blue", label="Piezo voltage")
+
+    ax_pos = ax_time.twinx()
+    ax_pos.set_ylabel("Gaussian fit center displacement (um)", color="tab:red")
+    ax_pos.tick_params(axis="y", labelcolor="tab:red")
+    # camera rotated 90 deg: camera X data is physical/piezo Y and vice versa,
+    # so label the traces in the piezo frame (data columns are unchanged)
+    line_cx, = ax_pos.plot([], [], "-", color="tab:red", label="Fit center Y")
+    line_cy, = ax_pos.plot([], [], "-", color="tab:orange", label="Fit center X")
+
+    # combined legend across the twinned axes
+    legend_handles = [line_voltage, line_cx, line_cy]
+    ax_time.legend(legend_handles, [h.get_label() for h in legend_handles],
+                   loc="upper right", fontsize=8)
+
+    ax_xy.set_xlabel("Fit center Y (um)")
+    ax_xy.set_ylabel("Fit center X (um)")
+    ax_xy.set_title("Beam position trajectory (Gaussian fit center)")
+    scatter_xy = ax_xy.scatter([], [], c=[], cmap="viridis", s=15, vmin=0, vmax=1)
+    cbar = fig.colorbar(scatter_xy, ax=ax_xy)
+    cbar.set_label("Sample")
+
+    fig.suptitle(f"Piezo {axis}-axis triangle scan ({v_min:.1f}-{v_max:.1f} V) "
+                 f"vs beam position")
+    fig.tight_layout()
+
+    def redraw(rows, gfx_hist, gfy_hist):
+        xs = list(range(len(rows)))
+        line_voltage.set_data(xs, [r[2] for r in rows])
+        line_cx.set_data(xs, gfx_hist)
+        line_cy.set_data(xs, gfy_hist)
+        ax_time.relim(); ax_time.autoscale_view()
+        ax_pos.relim(); ax_pos.autoscale_view()
+
+        offsets = np.column_stack([gfx_hist, gfy_hist]) if gfx_hist else np.empty((0, 2))
+        scatter_xy.set_offsets(offsets)
+        scatter_xy.set_array(np.array(xs))
+        if xs:
+            scatter_xy.set_clim(0, max(xs))
+        ax_xy.relim(); ax_xy.autoscale_view()
+
+        fig.canvas.draw_idle()
+        fig.canvas.flush_events()
+
+    # --- scan loop ---
+    rows = []
+    gfx_hist, gfy_hist = [], []
+    interrupted = False
+
+    try:
+        for i, v_set in enumerate(voltages):
+            set_axis_voltage(piezo_hdl, float(v_set))
+            if settle_time:
+                time.sleep(settle_time)
+
+            v_readback = [0.0]
+            get_axis_voltage(piezo_hdl, v_readback)
+
+            scan = tlbc1.get_scan_data(bc1_vi)
+
+            centroid_x_um = (scan.centroidPositionX - sensor.center_x) * sensor.pitch_h
+            centroid_y_um = (scan.centroidPositionY - sensor.center_y) * sensor.pitch_v
+            gfit_center_x_um = (scan.gaussianFitCentroidPositionX - sensor.center_x) * sensor.pitch_h
+            gfit_center_y_um = (scan.gaussianFitCentroidPositionY - sensor.center_y) * sensor.pitch_v
+            total_power_mw = 10.0 ** (scan.totalPower / 10.0)
+
+            timestamp = datetime.datetime.now()
+            rows.append([
+                i, timestamp.isoformat(), v_set, v_readback[0],
+                centroid_x_um, centroid_y_um, gfit_center_x_um, gfit_center_y_um,
+                scan.gaussianFitRatingX, scan.gaussianFitRatingY,
+                scan.peakIntensity, total_power_mw,
+            ])
+
+            gfx_hist.append(gfit_center_x_um)
+            gfy_hist.append(gfit_center_y_um)
+
+            print(f"[{timestamp:%H:%M:%S.%f}] {i + 1}/{len(voltages)} "
+                  f"V_set={v_set:6.2f}V V_read={v_readback[0]:6.2f}V "
+                  f"Centroid=({centroid_x_um:7.2f}, {centroid_y_um:7.2f}) um "
+                  f"GaussFitCenter=({gfit_center_x_um:7.2f}, {gfit_center_y_um:7.2f}) um "
+                  f"rating=({scan.gaussianFitRatingX:.3f}, {scan.gaussianFitRatingY:.3f})")
+
+            if live and (i % PLOT_UPDATE_EVERY == 0 or i == len(voltages) - 1):
+                redraw(rows, gfx_hist, gfy_hist)
+
+    except KeyboardInterrupt:
+        interrupted = True
+        print(f"\nInterrupted after {len(rows)} samples -- saving this sub-scan.")
+
+    csv_path = None
+    if rows:
+        redraw(rows, gfx_hist, gfy_hist)
+        csv_path = save_results(rows, fig, output_dir, axis, v_min, v_max)
+
+    if not live:
+        plt.close(fig)
+
+    if interrupted:
+        raise KeyboardInterrupt
+
+    return csv_path, rows
 
 
 def main():
     axis = AXIS.upper()
-    set_axis_voltage = {"X": mdtSetXAxisVoltage, "Y": mdtSetYAxisVoltage}[axis]
-    get_axis_voltage = {"X": mdtGetXAxisVoltage, "Y": mdtGetYAxisVoltage}[axis]
 
     # --- connect to the piezo controller ---
     devs = mdtListDevices()
@@ -120,8 +276,6 @@ def main():
     if v_max < V_MAX:
         print(f"Requested max {V_MAX}V exceeds device limit {limit_voltage[0]}V, clipping to {v_max}V.")
 
-    voltages = triangle_wave(V_MIN, v_max, POINTS_PER_RAMP, N_CYCLES)
-
     # --- connect to the beam profiler ---
     try:
         bc1_vi, bc1_info = tlbc1.open_first_device()
@@ -132,8 +286,7 @@ def main():
     print("Connected to beam profiler", bc1_info["model_name"], bc1_info["serial_number"])
 
     pixel_count_x, pixel_count_y, pixel_pitch_h, pixel_pitch_v = tlbc1.get_sensor_information(bc1_vi)
-    center_x = pixel_count_x / 2.0
-    center_y = pixel_count_y / 2.0
+    sensor = Sensor(pixel_count_x / 2.0, pixel_count_y / 2.0, pixel_pitch_h, pixel_pitch_v)
 
     # disabling auto-exposure cuts ~35-40% off each get_scan_data() call;
     # remember the previous settings so they can be restored afterwards
@@ -142,109 +295,24 @@ def main():
     tlbc1.set_auto_exposure(bc1_vi, False)
     tlbc1.set_exposure_time(bc1_vi, FIXED_EXPOSURE_MS)
 
-    print(f"~{len(voltages)} samples queued. Camera frame latency dominates scan "
-          f"time (seconds/sample) -- press Ctrl+C any time to stop early and save.")
-
-    # --- live plot setup ---
-    plt.ion()
-    fig, (ax_time, ax_xy) = plt.subplots(1, 2, figsize=(11, 5))
-
-    ax_time.set_xlabel("Sample")
-    ax_time.set_ylabel("Voltage (V)", color="tab:blue")
-    ax_time.tick_params(axis="y", labelcolor="tab:blue")
-    line_voltage, = ax_time.plot([], [], "-", color="tab:blue", label="Piezo voltage")
-
-    ax_pos = ax_time.twinx()
-    ax_pos.set_ylabel("Gaussian fit center displacement (um)", color="tab:red")
-    ax_pos.tick_params(axis="y", labelcolor="tab:red")
-    # camera is mounted rotated 90 deg, so camera X is physical Y and vice versa;
-    # data columns are unchanged, only the display labels are swapped
-    line_cx, = ax_pos.plot([], [], "-", color="tab:red", label="Fit center Y")
-    line_cy, = ax_pos.plot([], [], "-", color="tab:orange", label="Fit center X")
-
-    ax_xy.set_xlabel("Fit center Y (um)")
-    ax_xy.set_ylabel("Fit center X (um)")
-    ax_xy.set_title("Beam position trajectory (Gaussian fit center)")
-    scatter_xy = ax_xy.scatter([], [], c=[], cmap="viridis", s=15)
-
-    fig.suptitle(f"Piezo {axis}-axis triangle scan vs beam position")
-    fig.tight_layout()
-
-    def redraw(rows, gfx_hist, gfy_hist):
-        xs = list(range(len(rows)))
-        line_voltage.set_data(xs, [r[2] for r in rows])
-        line_cx.set_data(xs, gfx_hist)
-        line_cy.set_data(xs, gfy_hist)
-        ax_time.relim(); ax_time.autoscale_view()
-        ax_pos.relim(); ax_pos.autoscale_view()
-
-        scatter_xy.set_offsets(np.column_stack([gfx_hist, gfy_hist]))
-        scatter_xy.set_array(np.array(xs))
-        ax_xy.relim(); ax_xy.autoscale_view()
-
-        fig.canvas.draw_idle()
-        fig.canvas.flush_events()
-
-    # --- scan loop ---
-    rows = []
-    gfx_hist, gfy_hist = [], []
-    interrupted = False
+    print("Camera frame latency dominates scan time (seconds/sample) -- press "
+          "Ctrl+C any time to stop early and save.")
 
     try:
-        for i, v_set in enumerate(voltages):
-            set_axis_voltage(piezo_hdl, float(v_set))
-            if SETTLE_TIME:
-                time.sleep(SETTLE_TIME)
-
-            v_readback = [0.0]
-            get_axis_voltage(piezo_hdl, v_readback)
-
-            scan = tlbc1.get_scan_data(bc1_vi)
-
-            centroid_x_um = (scan.centroidPositionX - center_x) * pixel_pitch_h
-            centroid_y_um = (scan.centroidPositionY - center_y) * pixel_pitch_v
-            gfit_center_x_um = (scan.gaussianFitCentroidPositionX - center_x) * pixel_pitch_h
-            gfit_center_y_um = (scan.gaussianFitCentroidPositionY - center_y) * pixel_pitch_v
-            total_power_mw = 10.0 ** (scan.totalPower / 10.0)
-
-            timestamp = datetime.datetime.now()
-            rows.append([
-                i, timestamp.isoformat(), v_set, v_readback[0],
-                centroid_x_um, centroid_y_um, gfit_center_x_um, gfit_center_y_um,
-                scan.gaussianFitRatingX, scan.gaussianFitRatingY,
-                scan.peakIntensity, total_power_mw,
-            ])
-
-            gfx_hist.append(gfit_center_x_um)
-            gfy_hist.append(gfit_center_y_um)
-
-            print(f"[{timestamp:%H:%M:%S.%f}] {i + 1}/{len(voltages)} "
-                  f"V_set={v_set:6.2f}V V_read={v_readback[0]:6.2f}V "
-                  f"Centroid=({centroid_x_um:7.2f}, {centroid_y_um:7.2f}) um "
-                  f"GaussFitCenter=({gfit_center_x_um:7.2f}, {gfit_center_y_um:7.2f}) um "
-                  f"rating=({scan.gaussianFitRatingX:.3f}, {scan.gaussianFitRatingY:.3f})")
-
-            if i % PLOT_UPDATE_EVERY == 0 or i == len(voltages) - 1:
-                redraw(rows, gfx_hist, gfy_hist)
-
+        run_triangle_scan(piezo_hdl, axis, bc1_vi, sensor, V_MIN, v_max,
+                          POINTS_PER_RAMP, N_CYCLES, SETTLE_TIME, OUTPUT_DIR,
+                          live=True)
     except KeyboardInterrupt:
-        interrupted = True
-        print(f"\nInterrupted by user after {len(rows)} samples -- saving collected data.")
+        print("Scan interrupted by user.")
 
     finally:
         # return piezo to 0V, restore exposure settings, release both devices
-        set_axis_voltage(piezo_hdl, 0.0)
+        _SET_AXIS[axis](piezo_hdl, 0.0)
         mdtClose(piezo_hdl)
         tlbc1.set_exposure_time(bc1_vi, prev_exposure_time)
         tlbc1.set_auto_exposure(bc1_vi, prev_auto_exposure)
         tlbc1.close(bc1_vi)
         print("Devices closed.")
-
-    if not rows:
-        return
-
-    redraw(rows, gfx_hist, gfy_hist)
-    save_results(rows, fig)
 
     plt.ioff()
     plt.show(block=False)

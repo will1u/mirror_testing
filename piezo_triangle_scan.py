@@ -67,12 +67,12 @@ import tlbc1
 # Configuration
 # ----------------------------------------------------------------------------
 AXIS = "X"              # which piezo axis to scan: "X" or "Y"
-V_MIN = 0.0             # triangle wave low voltage (V)
-V_MAX = 40.0            # triangle wave high voltage (V), clipped to device limit
-POINTS_PER_RAMP = 40    # samples per up/down ramp
+V_MIN = 40.0             # triangle wave low voltage (V)
+V_MAX = 50.0            # triangle wave high voltage (V), clipped to device limit
+POINTS_PER_RAMP = 10    # samples per up/down ramp
 N_CYCLES = 3            # number of full triangle cycles
 SETTLE_TIME = 0.02      # seconds to wait after setting voltage before reading
-
+SUBSCAN_BUFFER_TIME = 3
 FIXED_EXPOSURE_MS = 0.5  # exposure time (ms) used during the scan; auto-exposure
                           # is disabled for the scan and restored afterwards
 PLOT_UPDATE_EVERY = 10     # redraw the live plot every N samples instead of every sample
@@ -121,7 +121,7 @@ def save_results(rows, fig, output_dir, axis, v_min, v_max):
 
 
 def run_triangle_scan(piezo_hdl, axis, bc1_vi, sensor, v_min, v_max,
-                      points_per_ramp, n_cycles, settle_time, output_dir,
+                      points_per_ramp, n_cycles, settle_time, subscan_buffer_time, output_dir,
                       live=True):
     """Run one triangle sweep on `axis` and save its CSV (+PNG) to output_dir.
 
@@ -197,10 +197,9 @@ def run_triangle_scan(piezo_hdl, axis, bc1_vi, sensor, v_min, v_max,
                 time.sleep(settle_time)
 
             v_readback = [0.0]
-            get_axis_voltage(piezo_hdl, v_readback)
 
             scan = tlbc1.get_scan_data(bc1_vi)
-
+            get_axis_voltage(piezo_hdl, v_readback)
             centroid_x_um = (scan.centroidPositionX - sensor.center_x) * sensor.pitch_h
             centroid_y_um = (scan.centroidPositionY - sensor.center_y) * sensor.pitch_v
             gfit_center_x_um = (scan.gaussianFitCentroidPositionX - sensor.center_x) * sensor.pitch_h
@@ -241,7 +240,9 @@ def run_triangle_scan(piezo_hdl, axis, bc1_vi, sensor, v_min, v_max,
 
     if interrupted:
         raise KeyboardInterrupt
-
+    
+    if subscan_buffer_time:
+        time.sleep(subscan_buffer_time)
     return csv_path, rows
 
 
@@ -291,7 +292,7 @@ def main():
 
     try:
         run_triangle_scan(piezo_hdl, axis, bc1_vi, sensor, V_MIN, v_max,
-                          POINTS_PER_RAMP, N_CYCLES, SETTLE_TIME, OUTPUT_DIR,
+                          POINTS_PER_RAMP, N_CYCLES, SETTLE_TIME, SUBSCAN_BUFFER_TIME, OUTPUT_DIR,
                           live=True)
     except KeyboardInterrupt:
         print("Scan interrupted by user.")

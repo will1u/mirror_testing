@@ -33,13 +33,13 @@ from piezo_triangle_scan import Sensor, run_triangle_scan
 # ----------------------------------------------------------------------------
 AXES = ["X", "Y"]                               # piezo axes to characterize
 # CENTER_SETPOINTS = [20.0, 40.0, 60.0, 80.0, 100.0, 120.0]  # V, center of each sub-scan
-CENTER_SETPOINTS = [20.0]
+CENTER_SETPOINTS = [20.0, 40.0]
 SUB_SPAN = 5.0            # +/- V swept around each center setpoint
-POINTS_PER_RAMP = 20      # samples per up/down ramp of each sub-scan
-N_CYCLES = 3              # triangle cycles per sub-scan (needed for hysteresis)
-SETTLE_TIME = 0.02        # seconds to wait after setting voltage before reading
+POINTS_PER_RAMP = 5         # samples per up/down ramp of each sub-scan
+N_CYCLES = 2        # triangle cycles per sub-scan (needed for hysteresis)
+SETTLE_TIME = 0.02       # seconds to wait after setting voltage before reading
 FIXED_EXPOSURE_MS = 0.5   # exposure time (ms) used for the whole session
-
+SUBSCAN_BUFFER_TIME = 5
 OUTPUT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scans")
 
 
@@ -103,8 +103,6 @@ def main():
             if axis_change:
                 mdtSetXAxisVoltage(piezo_hdl, 0.0)
                 axis_change = False
-            # scan SUB_SPAN volts around the setpoint: e.g. 5 V around 20 V -> 15..25.
-            # the max(0.0, ...) only guards against commanding a negative voltage.
             v_min = max(0.0, center - SUB_SPAN)
             v_max = min(v_limit, center + SUB_SPAN)
             if v_max <= v_min:
@@ -113,7 +111,7 @@ def main():
                 continue
             csv_path, _ = run_triangle_scan(
                 piezo_hdl, axis, bc1_vi, sensor, v_min, v_max,
-                POINTS_PER_RAMP, N_CYCLES, SETTLE_TIME, master_dir, live=False,
+                POINTS_PER_RAMP, N_CYCLES, SETTLE_TIME, SUBSCAN_BUFFER_TIME, master_dir, live=False,
             )
             if csv_path:
                 completed.append(csv_path)

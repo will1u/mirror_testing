@@ -32,7 +32,8 @@ from piezo_triangle_scan import Sensor, run_triangle_scan
 # Configuration
 # ----------------------------------------------------------------------------
 AXES = ["X", "Y"]                               # piezo axes to characterize
-CENTER_SETPOINTS = [20.0, 40.0, 60.0, 80.0, 100.0]  # V, center of each sub-scan
+# CENTER_SETPOINTS = [20.0, 40.0, 60.0, 80.0, 100.0, 120.0]  # V, center of each sub-scan
+CENTER_SETPOINTS = [20.0]
 SUB_SPAN = 5.0            # +/- V swept around each center setpoint
 POINTS_PER_RAMP = 20      # samples per up/down ramp of each sub-scan
 N_CYCLES = 3              # triangle cycles per sub-scan (needed for hysteresis)
@@ -92,7 +93,16 @@ def main():
 
     completed = []
     try:
+        axis_prev = "X"
+        axis_change = False
+
         for axis, center in plan:
+            if axis != axis_prev:
+                axis_change = True
+            
+            if axis_change:
+                mdtSetXAxisVoltage(piezo_hdl, 0.0)
+                axis_change = False
             v_min = max(0.0, center - SUB_SPAN)
             v_max = min(v_limit, center + SUB_SPAN)
             if v_max <= v_min:
@@ -105,6 +115,8 @@ def main():
             )
             if csv_path:
                 completed.append(csv_path)
+            
+            axis_prev = axis
 
     except KeyboardInterrupt:
         print(f"\nMaster run interrupted -- {len(completed)} sub-scans saved.")

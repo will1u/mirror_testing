@@ -142,63 +142,45 @@ def run_triangle_scan(piezo_hdl, axis, bc1_vi, sensor, v_min, v_max,
     print(f"\n=== Piezo {axis} sub-scan {v_min:.1f}-{v_max:.1f} V "
           f"({len(voltages)} samples) ===")
 
-    # --- figure (drives the live view and/or the saved PNG) ---
+    # --- figure: hysteresis loop for the driven axis (drives live view + PNG) ---
     if live:
         plt.ion()
-    fig, (ax_time, ax_xy) = plt.subplots(1, 2, figsize=(11, 5))
+    fig, ax = plt.subplots(figsize=(7, 6))
 
-    ax_time.set_xlabel("Sample")
-    ax_time.set_ylabel("Voltage (V)", color="tab:blue")
-    ax_time.tick_params(axis="y", labelcolor="tab:blue")
-    line_voltage, = ax_time.plot([], [], "-", color="tab:blue", label="Piezo voltage")
+    # camera rotated 90 deg: the driven piezo axis's motion lands on the *other*
+    # camera column (piezo X -> camera Y, piezo Y -> camera X). Plot that column
+    # so the hysteresis loop shows the effect of the driven axis, labelled in the
+    # piezo frame. (gfx_hist = camera X data, gfy_hist = camera Y data.)
+    driven_is_x = (axis == "X")
 
-    ax_pos = ax_time.twinx()
-    ax_pos.set_ylabel("Gaussian fit center displacement (um)", color="tab:red")
-    ax_pos.tick_params(axis="y", labelcolor="tab:red")
-    # camera rotated 90 deg: camera X data is physical/piezo Y and vice versa,
-    # so label the traces in the piezo frame (data columns are unchanged)
-    line_cx, = ax_pos.plot([], [], "-", color="tab:red", label="Fit center Y")
-    line_cy, = ax_pos.plot([], [], "-", color="tab:orange", label="Fit center X")
-
-    # combined legend across the twinned axes
-    legend_handles = [line_voltage, line_cx, line_cy]
-    ax_time.legend(legend_handles, [h.get_label() for h in legend_handles],
-                   loc="upper right", fontsize=8)
-
-    ax_xy.set_xlabel("Fit center Y (um)")
-    ax_xy.set_ylabel("Fit center X (um)")
-    ax_xy.set_title("Beam position trajectory (Gaussian fit center)")
-    scatter_xy = ax_xy.scatter([], [], c=[], cmap="viridis", s=15, vmin=0, vmax=1)
-    cbar = fig.colorbar(scatter_xy, ax=ax_xy)
-    cbar.set_label("Sample")
-
-    fig.suptitle(f"Piezo {axis}-axis triangle scan ({v_min:.1f}-{v_max:.1f} V) "
-                 f"vs beam position")
+    ax.set_xlabel("Piezo voltage, readback (V)")
+    ax.set_ylabel(f"Piezo {axis} displacement (um)")
+    ax.set_title(f"Piezo {axis} hysteresis ({v_min:.1f}-{v_max:.1f} V)")
+    line_path, = ax.plot([], [], "-", color="gray", alpha=0.3, linewidth=0.8)
+    scatter = ax.scatter([], [], c=[], cmap="viridis", s=20, vmin=0, vmax=1)
+    cbar = fig.colorbar(scatter, ax=ax)
+    cbar.set_label("Sample (time order)")
     fig.tight_layout()
 
     def redraw(rows, gfx_hist, gfy_hist):
         xs = list(range(len(rows)))
-        line_voltage.set_data(xs, [r[2] for r in rows])
-        line_cx.set_data(xs, gfx_hist)
-        line_cy.set_data(xs, gfy_hist)
-        ax_time.relim(); ax_time.autoscale_view()
-        ax_pos.relim(); ax_pos.autoscale_view()
-
-        offsets = np.column_stack([gfx_hist, gfy_hist]) if gfx_hist else np.empty((0, 2))
-        scatter_xy.set_offsets(offsets)
-        scatter_xy.set_array(np.array(xs))
+        volts = [r[3] for r in rows]                    # readback voltage
+        disp = gfy_hist if driven_is_x else gfx_hist    # driven-axis displacement
+        line_path.set_data(volts, disp)
+        offsets = np.column_stack([volts, disp]) if rows else np.empty((0, 2))
+        scatter.set_offsets(offsets)
+        scatter.set_array(np.array(xs))
         if xs:
-            scatter_xy.set_clim(0, max(xs))
-        # Axes.relim() ignores scatter collections, so rescale ax_xy explicitly
-        # from the point data -- otherwise the trajectory panel stays at the
-        # default (0,1) limits and renders blank in the saved PNG.
-        if gfx_hist:
-            xlo, xhi = min(gfx_hist), max(gfx_hist)
-            ylo, yhi = min(gfy_hist), max(gfy_hist)
+            scatter.set_clim(0, max(xs))
+        # Axes.relim() ignores scatter collections, so set limits explicitly from
+        # the data -- otherwise the plot renders blank / clipped in the PNG.
+        if rows:
+            xlo, xhi = min(volts), max(volts)
+            ylo, yhi = min(disp), max(disp)
             xpad = (xhi - xlo) * 0.05 or 1.0   # fallback pad when points coincide
             ypad = (yhi - ylo) * 0.05 or 1.0
-            ax_xy.set_xlim(xlo - xpad, xhi + xpad)
-            ax_xy.set_ylim(ylo - ypad, yhi + ypad)
+            ax.set_xlim(xlo - xpad, xhi + xpad)
+            ax.set_ylim(ylo - ypad, yhi + ypad)
 
         fig.canvas.draw_idle()
         fig.canvas.flush_events()

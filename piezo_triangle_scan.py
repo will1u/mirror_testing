@@ -189,7 +189,16 @@ def run_triangle_scan(piezo_hdl, axis, bc1_vi, sensor, v_min, v_max,
         scatter_xy.set_array(np.array(xs))
         if xs:
             scatter_xy.set_clim(0, max(xs))
-        ax_xy.relim(); ax_xy.autoscale_view()
+        # Axes.relim() ignores scatter collections, so rescale ax_xy explicitly
+        # from the point data -- otherwise the trajectory panel stays at the
+        # default (0,1) limits and renders blank in the saved PNG.
+        if gfx_hist:
+            xlo, xhi = min(gfx_hist), max(gfx_hist)
+            ylo, yhi = min(gfy_hist), max(gfy_hist)
+            xpad = (xhi - xlo) * 0.05 or 1.0   # fallback pad when points coincide
+            ypad = (yhi - ylo) * 0.05 or 1.0
+            ax_xy.set_xlim(xlo - xpad, xhi + xpad)
+            ax_xy.set_ylim(ylo - ypad, yhi + ypad)
 
         fig.canvas.draw_idle()
         fig.canvas.flush_events()

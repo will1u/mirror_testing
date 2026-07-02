@@ -103,6 +103,8 @@ def main():
             if axis_change:
                 mdtSetXAxisVoltage(piezo_hdl, 0.0)
                 axis_change = False
+            # scan SUB_SPAN volts around the setpoint: e.g. 5 V around 20 V -> 15..25.
+            # the max(0.0, ...) only guards against commanding a negative voltage.
             v_min = max(0.0, center - SUB_SPAN)
             v_max = min(v_limit, center + SUB_SPAN)
             if v_max <= v_min:

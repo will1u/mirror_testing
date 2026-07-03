@@ -58,7 +58,8 @@ import numpy as np
 from MDT_COMMAND_LIB import (
     mdtListDevices, mdtOpen, mdtClose,
     mdtGetLimtVoltage, mdtSetXAxisVoltage, mdtGetXAxisVoltage,
-    mdtSetYAxisVoltage, mdtGetYAxisVoltage,
+    mdtSetYAxisVoltage, mdtGetYAxisVoltage, mdtGetZAxisVoltage,
+    mdtSetZAxisVoltage
 )
 
 import tlbc1
@@ -84,8 +85,8 @@ OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scans")
 Sensor = namedtuple("Sensor", "center_x center_y pitch_h pitch_v")
 
 # piezo axis -> setter/getter for that axis' voltage
-_SET_AXIS = {"X": mdtSetXAxisVoltage, "Y": mdtSetYAxisVoltage}
-_GET_AXIS = {"X": mdtGetXAxisVoltage, "Y": mdtGetYAxisVoltage}
+_SET_AXIS = {"X": mdtSetXAxisVoltage, "Y": mdtSetYAxisVoltage, "Z": mdtSetZAxisVoltage}
+_GET_AXIS = {"X": mdtGetXAxisVoltage, "Y": mdtGetYAxisVoltage, "Z": mdtGetZAxisVoltage}
 
 
 def triangle_wave(v_min, v_max, points_per_ramp, n_cycles):

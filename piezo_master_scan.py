@@ -22,11 +22,10 @@ import os
 
 from MDT_COMMAND_LIB import (
     mdtListDevices, mdtOpen, mdtClose, mdtGetLimtVoltage,
-    mdtSetXAxisVoltage, mdtSetYAxisVoltage,
 )
 
 import tlbc1
-from piezo_triangle_scan import Sensor, run_triangle_scan
+from piezo_triangle_scan import Sensor, run_triangle_scan, _SET_AXIS, CAM_OF_PIEZO
 
 # ----------------------------------------------------------------------------
 # Configuration
@@ -44,7 +43,26 @@ SUBSCAN_BUFFER_TIME = 0.1
 OUTPUT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scans")
 
 
+def _validate_axes(axes):
+    """Safety guard: a master run may scan at most two piezo axes, and never two
+    that land on the same camera column. Since the camera has only two columns,
+    requiring the selected axes to map to *distinct* columns caps the count at
+    two and rejects X+Z (both steer onto camera Y, so they'd be indistinguishable
+    in analysis). Raises ValueError before any hardware is opened."""
+    unknown = [a for a in axes if a not in CAM_OF_PIEZO]
+    if unknown:
+        raise ValueError(f"Unknown piezo axis/axes {unknown}; use X, Y, or Z.")
+    cams = [CAM_OF_PIEZO[a] for a in axes]
+    if len(axes) > 2 or len(set(cams)) != len(cams):
+        raise ValueError(
+            f"A master scan may use at most two axes on distinct camera columns; "
+            f"{axes} map to camera {cams} (X and Z both land on camera Y, so they "
+            f"can't be told apart).")
+
+
 def main():
+    _validate_axes(AXES)
+
     # --- connect to the piezo controller ---
     devs = mdtListDevices()
     print("Piezo devices found:", devs)
@@ -102,7 +120,7 @@ def main():
                 axis_change = True
             
             if axis_change:
-                mdtSetXAxisVoltage(piezo_hdl, 0.0)
+                _SET_AXIS[axis_prev](piezo_hdl, 0.0)   # zero the axis we're leaving
                 axis_change = False
             v_min = max(0.0, center - SUB_SPAN)
             v_max = min(v_limit, center + SUB_SPAN)
@@ -123,9 +141,9 @@ def main():
         print(f"\nMaster run interrupted -- {len(completed)} sub-scans saved.")
 
     finally:
-        # return both axes to 0V, restore exposure, release both devices
-        mdtSetXAxisVoltage(piezo_hdl, 0.0)
-        mdtSetYAxisVoltage(piezo_hdl, 0.0)
+        # return every axis to 0V, restore exposure, release both devices
+        for setter in _SET_AXIS.values():
+            setter(piezo_hdl, 0.0)
         mdtClose(piezo_hdl)
         tlbc1.set_exposure_time(bc1_vi, prev_exposure_time)
         tlbc1.set_auto_exposure(bc1_vi, prev_auto_exposure)

@@ -67,7 +67,7 @@ import tlbc1
 # ----------------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------------
-AXIS = "X"              # which piezo axis to scan: "X" or "Y"
+AXIS = "X"              # which piezo axis to scan: "X", "Y", or "Z"
 V_MIN = 40.0             # triangle wave low voltage (V)
 V_MAX = 50.0            # triangle wave high voltage (V), clipped to device limit
 POINTS_PER_RAMP = 10    # samples per up/down ramp
@@ -87,6 +87,13 @@ Sensor = namedtuple("Sensor", "center_x center_y pitch_h pitch_v")
 # piezo axis -> setter/getter for that axis' voltage
 _SET_AXIS = {"X": mdtSetXAxisVoltage, "Y": mdtSetYAxisVoltage, "Z": mdtSetZAxisVoltage}
 _GET_AXIS = {"X": mdtGetXAxisVoltage, "Y": mdtGetYAxisVoltage, "Z": mdtGetZAxisVoltage}
+
+# which camera column carries each piezo axis's motion. The camera is mounted
+# rotated 90 deg (piezo X -> camera Y, piezo Y -> camera X) and the Z piezo also
+# steers the beam onto the vertical (camera Y) column, so Z shares camera Y with
+# X. Used to pick the plotted column and, in piezo_master_scan.py, to forbid
+# scanning two axes that land on the same camera column in one master run.
+CAM_OF_PIEZO = {"X": "Y", "Y": "X", "Z": "Y"}
 
 
 def triangle_wave(v_min, v_max, points_per_ramp, n_cycles):
@@ -155,11 +162,12 @@ def run_triangle_scan(piezo_hdl, axis, bc1_vi, sensor, v_min, v_max,
         plt.ion()
     fig, ax = plt.subplots(figsize=(7, 6))
 
-    # camera rotated 90 deg: the driven piezo axis's motion lands on the *other*
-    # camera column (piezo X -> camera Y, piezo Y -> camera X). Plot that column
-    # so the hysteresis loop shows the effect of the driven axis, labelled in the
-    # piezo frame. (gfx_hist = camera X data, gfy_hist = camera Y data.)
-    driven_is_x = (axis == "X")
+    # the driven piezo axis's motion lands on a particular camera column: camera
+    # rotated 90 deg so piezo X -> camera Y and piezo Y -> camera X, and the Z
+    # piezo also steers onto camera Y. Plot that column so the hysteresis loop
+    # shows the effect of the driven axis, labelled in the piezo frame.
+    # (gfx_hist = camera X data, gfy_hist = camera Y data.)
+    driven_cam = CAM_OF_PIEZO[axis]
 
     ax.set_xlabel("Piezo voltage, readback (V)")
     ax.set_ylabel(f"Piezo {axis} displacement (um)")
@@ -173,7 +181,7 @@ def run_triangle_scan(piezo_hdl, axis, bc1_vi, sensor, v_min, v_max,
     def redraw(rows, gfx_hist, gfy_hist):
         xs = list(range(len(rows)))
         volts = [r[3] for r in rows]                    # readback voltage
-        disp = gfy_hist if driven_is_x else gfx_hist    # driven-axis displacement
+        disp = gfy_hist if driven_cam == "Y" else gfx_hist   # driven-axis displacement
         line_path.set_data(volts, disp)
         offsets = np.column_stack([volts, disp]) if rows else np.empty((0, 2))
         scatter.set_offsets(offsets)

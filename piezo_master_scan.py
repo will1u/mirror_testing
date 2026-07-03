@@ -31,15 +31,16 @@ from piezo_triangle_scan import Sensor, run_triangle_scan
 # ----------------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------------
-AXES = ["X", "Y"]                               # piezo axes to characterize
+# AXES = ["X", "Y"]                               # piezo axes to characterize
+AXES = ["Z"]
 # CENTER_SETPOINTS = [20.0, 40.0, 60.0, 80.0, 100.0, 120.0]  # V, center of each sub-scan
 CENTER_SETPOINTS = [20.0, 40.0]
 SUB_SPAN = 5.0            # +/- V swept around each center setpoint
 POINTS_PER_RAMP = 5         # samples per up/down ramp of each sub-scan
-N_CYCLES = 2        # triangle cycles per sub-scan (needed for hysteresis)
+N_CYCLES = 1        # triangle cycles per sub-scan (needed for hysteresis)
 SETTLE_TIME = 0.02       # seconds to wait after setting voltage before reading
 FIXED_EXPOSURE_MS = 0.5   # exposure time (ms) used for the whole session
-SUBSCAN_BUFFER_TIME = 5
+SUBSCAN_BUFFER_TIME = 0.1
 OUTPUT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scans")
 
 

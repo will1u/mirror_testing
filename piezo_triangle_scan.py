@@ -95,8 +95,14 @@ def triangle_wave(v_min, v_max, points_per_ramp, n_cycles):
     return np.tile(one_cycle, n_cycles)
 
 
-def save_results(rows, fig, output_dir, axis, v_min, v_max):
-    """Write one sub-scan's CSV (+PNG) to output_dir; return the CSV path."""
+def save_results(rows, fig, output_dir, axis, v_min, v_max, points_per_ramp, n_cycles):
+    """Write one sub-scan's CSV (+PNG) to output_dir; return the CSV path.
+
+    `points_per_ramp` and `n_cycles` describe the triangle-wave structure and are
+    written as constant columns on every row so the analysis notebook can pick
+    out individual ramps/cycles (e.g. omit the first up-ramp) without having to
+    re-infer the ramp length from the voltage-setpoint pattern.
+    """
     os.makedirs(output_dir, exist_ok=True)
     run_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     axis = axis.upper()
@@ -110,8 +116,9 @@ def save_results(rows, fig, output_dir, axis, v_min, v_max):
             "centroid_x_um", "centroid_y_um", "gaussfit_center_x_um", "gaussfit_center_y_um",
             "gaussfit_rating_x", "gaussfit_rating_y",
             "peak_intensity_counts", "total_power_mW",
+            "points_per_ramp", "n_cycles",
         ])
-        writer.writerows(rows)
+        writer.writerows(row + [points_per_ramp, n_cycles] for row in rows)
     print(f"Saved {len(rows)} samples to {csv_path}")
 
     plot_path = os.path.join(output_dir, base + ".png")
@@ -233,7 +240,8 @@ def run_triangle_scan(piezo_hdl, axis, bc1_vi, sensor, v_min, v_max,
     csv_path = None
     if rows:
         redraw(rows, gfx_hist, gfy_hist)
-        csv_path = save_results(rows, fig, output_dir, axis, v_min, v_max)
+        csv_path = save_results(rows, fig, output_dir, axis, v_min, v_max,
+                                points_per_ramp, n_cycles)
 
     if not live:
         plt.close(fig)

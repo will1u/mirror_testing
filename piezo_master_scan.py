@@ -30,13 +30,13 @@ from piezo_triangle_scan import Sensor, run_triangle_scan, _SET_AXIS, CAM_OF_PIE
 # ----------------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------------
-# AXES = ["X", "Y"]                               # piezo axes to characterize
-AXES = ["Z"]
-# CENTER_SETPOINTS = [20.0, 40.0, 60.0, 80.0, 100.0, 120.0]  # V, center of each sub-scan
-CENTER_SETPOINTS = [20.0, 40.0]
+AXES = ["X", "Y"]                               # piezo axes to characterize
+# AXES = ["Z"]
+CENTER_SETPOINTS = [20.0, 40.0, 60.0, 80.0, 100.0, 120.0]  # V, center of each sub-scan
+# CENTER_SETPOINTS = [20.0, 40.0]
 SUB_SPAN = 5.0            # +/- V swept around each center setpoint
-POINTS_PER_RAMP = 5         # samples per up/down ramp of each sub-scan
-N_CYCLES = 1        # triangle cycles per sub-scan (needed for hysteresis)
+POINTS_PER_RAMP = 20         # samples per up/down ramp of each sub-scan
+N_CYCLES = 4        # triangle cycles per sub-scan (needed for hysteresis)
 SETTLE_TIME = 0.02       # seconds to wait after setting voltage before reading
 FIXED_EXPOSURE_MS = 0.5   # exposure time (ms) used for the whole session
 SUBSCAN_BUFFER_TIME = 0.1

@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Crash dumps
+*.stackdump
+
+# Generated scan data: raw per-run CSV/PNG. Live scans are written to scans/
+# (piezo_triangle_scan.py etc.); curated runs worth keeping are committed under
+# shared_scans/ instead. The root-level patterns are anchored to the repo root
+# so they only ignore legacy stray scans here, NOT the identically-named files
+# inside tracked shared_scans/master_*/ runs.
+scans/
+/piezo_scan_*.csv
+/piezo_scan_*.png
+/stability_test_*.csv
+/stability_test_*.png
+
+# Zipped scan runs: only the unzipped shared_scans/master_*/ dirs are tracked.
+*.zip
